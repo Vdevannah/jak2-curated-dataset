@@ -83,7 +83,7 @@ with mlflow.start_run(run_name="jak2_rf_scaffold_split") as run:
     mlflow.log_figure(fig, "model_parity.png")
     plt.show()
 
-    mlflow.sklearn.log_model(model, "model", input_example=X[:5])
+    mlflow.sklearn.log_model(model, name="model", input_example=X[:5])
 
 print({k: round(v, 2) if isinstance(v, float) else v for k, v in metrics.items()})
 print(f"MLflow run: {run.info.run_id}")

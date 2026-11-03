@@ -23,7 +23,6 @@ dbutils.library.restartPython()
 # COMMAND ----------
 
 from pyspark.sql import functions as F
-import pandas as pd
 
 CATALOG = "workspace"
 SCHEMA = "jak2"
@@ -45,7 +44,7 @@ def log_step(step, rule, before_df, after_df):
 
 # COMMAND ----------
 
-df = spark.table(T("bronze_activities")).cache()
+df = spark.table(T("bronze_activities"))
 
 df = log_step("1 IC50 only", "standard_type == IC50", df, df.filter(F.col("standard_type") == "IC50"))
 df = log_step("2 Biochemical assays", "assay_type == B", df, df.filter(F.col("assay_type") == "B"))
@@ -77,32 +76,37 @@ df = log_step("7 Exact values only", "standard_relation is '='", df,
 # MAGIC
 # MAGIC Each distinct SMILES is standardized once to its **neutral parent** (salts and solvents removed,
 # MAGIC charges neutralized), and the result is joined back to the measurements. The parent InChIKey becomes
-# MAGIC the compound identifier. There are about 10,000 distinct structures, so this runs on the driver;
-# MAGIC for millions of structures the same function would run as a pandas UDF across the cluster.
+# MAGIC the compound identifier. RDKit runs inside Spark with `mapInPandas`, so the work is distributed across
+# MAGIC the cluster and Unity Catalog lineage traces silver directly back to the bronze table.
 
 # COMMAND ----------
 
 from rdkit import Chem, RDLogger
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
-RDLogger.DisableLog("rdApp.*")
-chooser = rdMolStandardize.LargestFragmentChooser()
-uncharger = rdMolStandardize.Uncharger()
+def standardize_batches(batches):
+    """Standardize each SMILES to its neutral parent (runs on Spark workers, one pandas batch at a time)."""
+    RDLogger.DisableLog("rdApp.*")
+    chooser = rdMolStandardize.LargestFragmentChooser()
+    uncharger = rdMolStandardize.Uncharger()
 
-def standardize(smiles):
-    """Return (parent SMILES, parent InChIKey), or (None, None) if the structure cannot be parsed."""
-    if not isinstance(smiles, str):
-        return None, None
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return None, None
-    mol = uncharger.uncharge(chooser.choose(rdMolStandardize.Cleanup(mol)))
-    return Chem.MolToSmiles(mol), Chem.MolToInchiKey(mol)
+    def standardize(smiles):
+        mol = Chem.MolFromSmiles(smiles) if isinstance(smiles, str) else None
+        if mol is None:
+            return None, None
+        mol = uncharger.uncharge(chooser.choose(rdMolStandardize.Cleanup(mol)))
+        return Chem.MolToSmiles(mol), Chem.MolToInchiKey(mol)
 
-distinct = df.select("canonical_smiles").distinct().toPandas()
-distinct[["parent_smiles", "parent_inchikey"]] = pd.DataFrame(
-    distinct["canonical_smiles"].apply(standardize).tolist(), index=distinct.index)
-lookup = spark.createDataFrame(distinct.dropna(subset=["parent_inchikey"]))
+    for batch in batches:
+        results = [standardize(s) for s in batch["canonical_smiles"]]
+        batch["parent_smiles"] = [r[0] for r in results]
+        batch["parent_inchikey"] = [r[1] for r in results]
+        yield batch
+
+lookup = (df.select("canonical_smiles").distinct()
+          .mapInPandas(standardize_batches,
+                       schema="canonical_smiles string, parent_smiles string, parent_inchikey string")
+          .filter(F.col("parent_inchikey").isNotNull()))
 
 df = log_step("8 Valid structures", "structure parses in RDKit", df,
               df.join(lookup, on="canonical_smiles", how="inner"))
