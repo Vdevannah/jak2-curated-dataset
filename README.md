@@ -3,7 +3,7 @@
 **Turning 56,323 raw public bioactivity records into a clean, documented, model-ready dataset —
 using medicinal chemistry judgment to decide which measurements can be trusted and compared.**
 
-Python · RDKit · pandas · scikit-learn · Matplotlib · ChEMBL
+Python · RDKit · pandas · scikit-learn · Matplotlib · ChEMBL · **Databricks** (PySpark, Delta Lake, Unity Catalog, MLflow, Jobs)
 
 ---
 
@@ -17,6 +17,10 @@ wild-type enzyme assays; and replicate measurements disagree.
 Models or SAR conclusions built on that raw data are unreliable. This project resolves each issue
 with an explicit, documented rule and records how many records every rule removed.
 
+The pipeline is built twice: as a local Jupyter notebook (pandas), and as a production-style
+**Databricks pipeline** (PySpark, Delta tables, lineage, MLflow, scheduled Job). Both produce identical
+curated data ([section 7](#7-the-same-pipeline-on-databricks)).
+
 ## Pipeline
 
 ```mermaid
@@ -29,7 +33,7 @@ flowchart LR
 
 | Layer | Contents | Output |
 |---|---|---|
-| Bronze | Raw ChEMBL activity records, untouched | `data/raw/jak2_chembl_activities.csv` |
+| Bronze | Raw ChEMBL activity records, untouched | `data/raw/jak2_chembl_activities.csv` (66 MB, not committed; recreate with the export script) |
 | Silver | Filtered, standardized measurements with pIC50 | `data/processed/jak2_silver_measurements.csv` |
 | Gold | One row per compound: mean pIC50, spread, number of measurements | `data/processed/jak2_gold_compounds.csv` |
 | Data-quality log | Rows removed by each rule, and why | `data/processed/jak2_dq_log.csv` |
@@ -119,6 +123,56 @@ are slightly over-predicted and the most potent slightly under-predicted.
 
 ![Predicted vs measured pIC50](figures/model_parity.png)
 
+## 7. The same pipeline on Databricks
+
+The curation was rebuilt in [`databricks/`](databricks/) as a medallion pipeline: raw ChEMBL data in a
+Unity Catalog volume, **bronze → silver → gold Delta tables**, a data-quality log table, documented columns,
+and a model tracked in **MLflow**. RDKit structure standardization runs inside Spark (`mapInPandas`), so
+the work is distributed across the cluster.
+
+**Same rules, same results.** pandas and PySpark produced identical curated data at every step:
+
+| | Local (pandas) | Databricks (PySpark) |
+|---|---|---|
+| Raw records (bronze) | 56,323 | 56,323 |
+| Curated measurements (silver) | 13,422 | 13,422 |
+| Curated compounds (gold) | 9,596 | 9,596 |
+| Flagged inconsistent | 423 | 423 |
+| Model R² (scaffold split) | 0.68 | 0.68 |
+
+Comparing the two implementations caught one subtle difference (rounding before the 10-fold check),
+which was fixed so both agree exactly.
+
+### One-click pipeline (Databricks Job)
+
+Four notebook tasks run in sequence on serverless compute; the full rebuild takes about 10 minutes.
+
+![Databricks Job run: bronze, silver, gold, model](figures/databricks/job_run.png)
+
+### Self-documenting gold table (Unity Catalog)
+
+Every column of `gold_compounds` carries a description, and Unity Catalog links the table to the
+notebooks and job that build and use it.
+
+![gold_compounds columns and descriptions](figures/databricks/gold_columns.png)
+
+### Lineage: gold traced back to raw data
+
+Unity Catalog records column-level lineage from `bronze_activities` through `silver_measurements` to
+`gold_compounds`. (The two temporary volumes are from an earlier run, before the RDKit step was moved
+inside Spark.)
+
+![Lineage from bronze to gold](figures/databricks/lineage.png)
+
+### Model tracked in MLflow
+
+Parameters, metrics, the parity plot and the model are logged, together with the exact gold table
+version used for training and the Job run that produced it.
+
+![MLflow run](figures/databricks/mlflow_run.png)
+
+How to run it yourself: [`databricks/README.md`](databricks/README.md).
+
 ---
 
 ## How to run
@@ -137,9 +191,10 @@ jupyter notebook notebooks/jak2_curation.ipynb    # run all cells; figures are s
 jak2-curated-dataset/
 ├── scripts/export_chembl_jak2.py   # downloads raw ChEMBL data, with retries
 ├── notebooks/jak2_curation.ipynb   # bronze → silver → gold, data-quality log, figures, model
-├── data/raw/                       # raw ChEMBL export (bronze)
+├── databricks/                     # the same pipeline on Databricks (PySpark, Delta, MLflow, Job)
+├── data/raw/                       # raw ChEMBL export (bronze); created by the export script
 ├── data/processed/                 # curated datasets and data-quality log
-├── figures/                        # figures used in this README
+├── figures/                        # figures used in this README (Databricks screenshots in figures/databricks/)
 └── docs/curation_rules.md          # each curation rule and why
 ```
 
@@ -147,8 +202,9 @@ jak2-curated-dataset/
 
 - Group IC50 values by ATP concentration (matters for ATP-competitive kinase inhibitors).
 - Canonicalize tautomers.
-- Move the pipeline to Databricks as bronze/silver/gold Delta tables, with the data-quality log as a
-  table and model runs tracked in MLflow.
+- Add more endpoints as separate curated datasets: cellular IC50, Ki, and binding kinetics
+  (residence time), in one long-format table with an `endpoint` column.
+- Add automated data-quality expectations to the Databricks pipeline.
 
 ## Data source and license
 
