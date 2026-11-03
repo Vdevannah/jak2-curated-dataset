@@ -1,0 +1,10 @@
+step,rule,rows_before,rows_after,rows_removed
+1 IC50 only,standard_type == IC50,56323,19301,37022
+2 Biochemical assays,assay_type == B,19301,18690,611
+3 Human target,target_organism == Homo sapiens,18690,18690,0
+4 Wild-type enzyme,no mutant/variant in assay description,18690,18462,228
+5 No validity warning,data_validity_comment is empty,18462,17427,1035
+6 Valid nM values,units == nM and value > 0,17427,17287,140
+7 Exact values only,standard_relation is '=',17287,13450,3837
+8 Valid structures,structure parses in RDKit,13450,13422,28
+9 Plausible potency,3 <= pIC50 <= 12,13422,13422,0
