@@ -24,13 +24,16 @@ silver = spark.table(T("silver_measurements"))
 gold = (silver.groupBy("parent_inchikey")
         .agg(F.first("parent_smiles").alias("parent_smiles"),
              F.concat_ws(";", F.array_sort(F.collect_set("molecule_chembl_id"))).alias("chembl_ids"),
-             F.round(F.mean("pIC50"), 2).alias("pIC50_mean"),
-             F.round(F.coalesce(F.stddev("pIC50"), F.lit(0.0)), 2).alias("pIC50_std"),
-             F.round(F.min("pIC50"), 2).alias("pIC50_min"),
-             F.round(F.max("pIC50"), 2).alias("pIC50_max"),
+             F.mean("pIC50").alias("pIC50_mean"),
+             F.coalesce(F.stddev("pIC50"), F.lit(0.0)).alias("pIC50_std"),
+             F.min("pIC50").alias("pIC50_min"),
+             F.max("pIC50").alias("pIC50_max"),
              F.count("*").alias("n_measurements"),
              F.countDistinct("document_chembl_id").alias("n_documents"))
+        # Flag on unrounded values first, then round for display (matches the local notebook)
         .withColumn("flag_inconsistent", (F.col("pIC50_max") - F.col("pIC50_min")) > 1.0))
+for c in ["pIC50_mean", "pIC50_std", "pIC50_min", "pIC50_max"]:
+    gold = gold.withColumn(c, F.round(c, 2))
 
 gold.write.format("delta").mode("overwrite").option("overwriteSchema", True).saveAsTable(GOLD)
 
