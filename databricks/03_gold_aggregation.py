@@ -22,7 +22,7 @@ GOLD = T("gold_compounds")
 silver = spark.table(T("silver_measurements"))
 
 gold = (silver.groupBy("parent_inchikey")
-        .agg(F.first("parent_smiles").alias("parent_smiles"),
+        .agg(F.min("parent_smiles").alias("parent_smiles"),  # min() picks the same SMILES every run
              F.concat_ws(";", F.array_sort(F.collect_set("molecule_chembl_id"))).alias("chembl_ids"),
              F.mean("pIC50").alias("pIC50_mean"),
              F.coalesce(F.stddev("pIC50"), F.lit(0.0)).alias("pIC50_std"),

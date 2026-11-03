@@ -37,7 +37,8 @@ PARAMS = {"n_estimators": 500, "fingerprint": "Morgan r=2, 2048 bits", "split": 
 
 # COMMAND ----------
 
-data = spark.table(GOLD).filter("NOT flag_inconsistent").toPandas()
+# Sort so every run sees compounds in the same order (Spark does not guarantee row order)
+data = spark.table(GOLD).filter("NOT flag_inconsistent").orderBy("parent_inchikey").toPandas()
 mols = [Chem.MolFromSmiles(s) for s in data["parent_smiles"]]
 fpgen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
 X = np.array([fpgen.GetFingerprintAsNumPy(m) for m in mols])
